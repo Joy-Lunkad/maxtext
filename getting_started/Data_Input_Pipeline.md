@@ -15,7 +15,31 @@
 -->
 ## Data Input Pipeline
 
-Currently MaxText supports two data input pipelines: the tfds (tensorflow_datasets) based pipeline as default, and the Grain pipeline for determinism. 
+Currently MaxText supports three types of data input for training: HuggingFace datasets, Tensorflow Datasets (TFRecord files) through the tf.data based pipeline, and ArrayRecord files through the Grain pipeline for determinism. 
+
+### HuggingFace datasets
+The HuggingFace pipeline supports streaming directly from HuggingFace Hub, or from GCS bucket in HuggingFace supported formats (parquet, json, etc.). This is through the HuggingFace [`datasets.load_dataset` API](https://huggingface.co/docs/datasets/en/loading) with `streaming=True`, which take in `hf_*` parameters. 
+#### Example config for streaming from HuggingFace Hub (no download needed):
+```
+dataset_type: hf
+hf_path: 'allenai/c4'  # for using https://huggingface.co/datasets/allenai/c4
+hf_data_dir: 'en'
+hf_data_files: ''
+tokenizer_path: 'google-t5/t5-large'  # for using https://huggingface.co/google-t5/t5-large
+hf_access_token: ''  # provide token if using gated dataset or tokenizer
+```
+
+#### Example config for streaming from downloaded data in a GCS bucket:
+```
+dataset_type: hf
+hf_path: 'parquet'  # or json, arrow, etc.
+hf_data_dir: ''
+hf_data_files: 'gs://<bucket>/<folder>/*-train-*.parquet'  # match the train files
+tokenizer_path: 'google-t5/t5-large'  # for using https://huggingface.co/google-t5/t5-large
+```
+#### Limitations & Recommendations
+1. Streaming data directly from HuggingFace Hub may be impacted by the traffic of the server. During peak hours you may encounter "504 Server Error: Gateway Time-out". It's recommended to download the HuggingFace dataset to a GCS buckt or disk for the most stable experience.
+2. Streaming data directly from HuggingFace Hub works in multihost settings with a samll number of hosts. We have encountered "read time out" error with host number > 16.
 
 ### Deterministic Data Input Pipeline - Grain
 
@@ -30,4 +54,17 @@ bash setup_gcsfuse.sh DATASET_GCS_BUCKET=$BUCKET_NAME MOUNT_PATH=$MOUNT_PATH
 5. Example command:
 ```
 bash setup_gcsfuse.sh DATASET_GCS_BUCKET=maxtext-dataset MOUNT_PATH=/tmp/gcsfuse && python3 MaxText/train.py MaxText/configs/base.yml run_name=<RUN_NAME> base_output_directory=gs://<MY_BUCKET>  dataset_path=/tmp/gcsfuse/ dataset_name='array-record/c4/en/3.0.1' dataset_type=c4-array_record grain_worker_count=2
+```
+
+### Tensorflow Datasets
+
+1. Download the Allenai c4 dataset in TFRecord format to a GCS bucket (will cost about $100, [details](https://github.com/allenai/allennlp/discussions/5056))
+```
+bash download_dataset.sh {GCS_PROJECT} {GCS_BUCKET_NAME}
+```
+2. Use the following config:
+```
+dataset_type: c4
+dataset_name: 'c4/en:3.0.1'
+tokenizer_path: "assets/tokenizer.llama2"
 ```
