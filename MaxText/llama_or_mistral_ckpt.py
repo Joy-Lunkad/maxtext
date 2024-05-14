@@ -297,6 +297,7 @@ def convert(base_model_path, maxtext_model_path, model_size):
     jax_weights["decoder"]["layers"]["mlp"] = layer_weight["mlp"]
   else:
     layer_weight["gate"]["kernel"] = np.array(layer_weight["gate"]["kernel"])
+    # print(f'layer_weight["gate"]["kernel"]: {type(layer_weight["gate"]["kernel"])}')
     layer_weight["gate"]["kernel"] = np.transpose(layer_weight["gate"]["kernel"], axes=(1, 0, 2))
     jax_weights["decoder"]["layers"]["MoeBlock_0"]["gate"]["kernel"] = layer_weight["gate"]["kernel"]
 
@@ -304,37 +305,42 @@ def convert(base_model_path, maxtext_model_path, model_size):
     wi_1 = []
     wo = []
     for k in range(num_experts):
+      # print(type(layer_weight[f"mlp_{k}"]["wi_0"]["kernel"]))
       layer_weight[f"mlp_{k}"]["wi_0"]["kernel"] = np.array(layer_weight[f"mlp_{k}"]["wi_0"]["kernel"])
       layer_weight[f"mlp_{k}"]["wi_1"]["kernel"] = np.array(layer_weight[f"mlp_{k}"]["wi_1"]["kernel"])
       layer_weight[f"mlp_{k}"]["wo"]["kernel"] = np.array(layer_weight[f"mlp_{k}"]["wo"]["kernel"])
       # swap the layer index
-      layer_weight[f"mlp_{k}"]["wi_0"]["kernel"] = np.transpose(layer_weight[f"mlp_{k}"]["wi_0"]["kernel"], axes=(1, 0, 2))
-      layer_weight[f"mlp_{k}"]["wi_1"]["kernel"] = np.transpose(layer_weight[f"mlp_{k}"]["wi_1"]["kernel"], axes=(1, 0, 2))
-      layer_weight[f"mlp_{k}"]["wo"]["kernel"] = np.transpose(layer_weight[f"mlp_{k}"]["wo"]["kernel"], axes=(1, 0, 2))
+      layer_weight[f"mlp_{k}"]["wi_0"]["kernel"] = np.transpose(layer_weight[f"mlp_{k}"]["wi_0"]["kernel"], axes=(0, 2, 1))
+      layer_weight[f"mlp_{k}"]["wi_1"]["kernel"] = np.transpose(layer_weight[f"mlp_{k}"]["wi_1"]["kernel"], axes=(0, 2, 1))
+      layer_weight[f"mlp_{k}"]["wo"]["kernel"] = np.transpose(layer_weight[f"mlp_{k}"]["wo"]["kernel"], axes=(0, 2, 1))
+      print(layer_weight[f"mlp_{k}"]["wo"]["kernel"].shape)
       # reshape
-      layer_weight[f"mlp_{k}"]["wi_0"]["kernel"] = np.reshape(layer_weight[f"mlp_{k}"]["wi_0"]["kernel"], (-1, base_emb_dim, base_mlp_dim))
-      layer_weight[f"mlp_{k}"]["wi_1"]["kernel"] = np.reshape(layer_weight[f"mlp_{k}"]["wi_1"]["kernel"], (-1, base_emb_dim, base_mlp_dim))
-      layer_weight[f"mlp_{k}"]["wo"]["kernel"] = np.reshape(layer_weight[f"mlp_{k}"]["wo"]["kernel"], (-1, base_mlp_dim, base_emb_dim))
-      
+      # layer_weight[f"mlp_{k}"]["wi_0"]["kernel"] = np.reshape(layer_weight[f"mlp_{k}"]["wi_0"]["kernel"], (-1, base_emb_dim, base_mlp_dim))
+      # layer_weight[f"mlp_{k}"]["wi_1"]["kernel"] = np.reshape(layer_weight[f"mlp_{k}"]["wi_1"]["kernel"], (-1, base_emb_dim, base_mlp_dim))
+      # layer_weight[f"mlp_{k}"]["wo"]["kernel"] = np.reshape(layer_weight[f"mlp_{k}"]["wo"]["kernel"], (-1, base_mlp_dim, base_emb_dim))
+
       wi_0.append(layer_weight[f"mlp_{k}"]["wi_0"]["kernel"])
       wi_1.append(layer_weight[f"mlp_{k}"]["wi_1"]["kernel"])
       wo.append(layer_weight[f"mlp_{k}"]["wo"]["kernel"])
 
     #   jax_weights["decoder"]["layers"][f"mlp_{k}"] = layer_weight[f"mlp_{k}"]
 
-    layer_weight["gate"]["wi_0"] = np.concatenate(np.array(wi_0), axis=0)
-    layer_weight["gate"]["wi_1"] = np.concatenate(np.array(wi_1), axis=0)
-    layer_weight["gate"]["wo"] = np.concatenate(np.array(wo), axis=0)
-    jax_weights["decoder"]["layers"]["MoeBlock_0"]["gate"]["wi_0"] = np.array(layer_weight["gate"]["wi_0"])
-    jax_weights["decoder"]["layers"]["MoeBlock_0"]["gate"]["wi_1"] = np.array(layer_weight["gate"]["wi_1"])
-    jax_weights["decoder"]["layers"]["MoeBlock_0"]["gate"]["wo"] = np.array(layer_weight["gate"]["wo"])
-
-    print(jax_weights["decoder"]["layers"]["MoeBlock_0"]["gate"]["wi_0"])
-
-#   print("before sharding jax_weights......")
-#   print(jax_weights)
+    layer_weight["gate"]["wi_0"] = np.array(wi_0)
+    layer_weight["gate"]["wi_1"] = np.array(wi_1)
+    layer_weight["gate"]["wo"] = np.array(wo)
+    jax_weights["decoder"]["layers"]["MoeBlock_0"]["gate"]["wi_0"] = layer_weight["gate"]["wi_0"]
+    jax_weights["decoder"]["layers"]["MoeBlock_0"]["gate"]["wi_1"] = layer_weight["gate"]["wi_1"]
+    jax_weights["decoder"]["layers"]["MoeBlock_0"]["gate"]["wo"] = layer_weight["gate"]["wo"]
 
   # jax_weights = jax.tree_util.tree_map(jax.numpy.array, jax_weights)
+  # import jax.numpy as jnp
+  # jax_weights = jax.tree_util.tree_map(jnp.array, jax_weights)
+  # def astype_fn(x):
+  #   if isinstance(x, jnp.ndarray):
+  #     return x.astype(jnp.bfloat16)
+  #   else:
+  #     return x
+  # jax_weights = jax.tree_util.tree_map(astype_fn, jax_weights)
 
   mesh = jax.sharding.Mesh(jax.devices(), "checkpoint_sharding_axis")
   s1 = jax.sharding.NamedSharding(mesh, jax.sharding.PartitionSpec("checkpoint_sharding_axis"))  # shards first axis
@@ -343,14 +349,17 @@ def convert(base_model_path, maxtext_model_path, model_size):
 
   def checkpoint_device_put(arr):
     if arr.shape[0] % SIMULATED_CPU_DEVICES_COUNT == 0:
+      print("sharding first axis")
       return jax.device_put(arr, device=s1)
     elif len(arr.shape) > 1 and arr.shape[1] % SIMULATED_CPU_DEVICES_COUNT == 0:
+      print("sharding second axis")
       return jax.device_put(arr, device=s2)
     else:
+      print("no sharding was possible, replicating")
       return jax.device_put(arr, device=s3)
 
   # convert all weights to jax.numpy with sharding if applicable
-  # jax_weights = jax.tree_util.tree_map(checkpoint_device_put, jax_weights)
+  jax_weights = jax.tree_util.tree_map(checkpoint_device_put, jax_weights)
 
   # dummy configs for the checkpoint_manager
   step_number_to_save_new_ckpt = 0
@@ -361,9 +370,6 @@ def convert(base_model_path, maxtext_model_path, model_size):
   checkpoint_manager = checkpointing.create_orbax_checkpoint_manager(
       maxtext_model_path, enable_checkpointing, async_checkpointing, save_interval_steps
   )
-
-  # print("before saving jax_weights......")
-  # print(jax_weights)
 
   state_new = train_state.TrainState(
       step=0, apply_fn=None, params={"params": jax_weights}, tx=None, opt_state={}  # type: ignore
